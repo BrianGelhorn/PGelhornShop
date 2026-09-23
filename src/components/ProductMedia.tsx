@@ -10,7 +10,7 @@ type Props = {
 export function ProductMedia({ product, className, decorative = false }: Props) {
   const [failed, setFailed] = useState(false)
 
-  if (product.image.includes('placehold.co/') || failed) {
+  if (!product.image || product.image.includes('placehold.co/') || failed) {
     return (
       <div
         className={`${className} media-placeholder`}

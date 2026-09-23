@@ -1,95 +1,136 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Product } from '../types'
+import { supabase } from '../lib/supabase'
 
-// Productos placeholder: reemplazar por el catálogo real cuando esté disponible.
-export const products: Product[] = [
-  {
-    id: 'set-destornilladores',
-    name: 'Set de destornilladores 32 piezas',
-    category: 'Herramientas',
-    price: 28900,
-    image: 'https://placehold.co/800x800/e7f0ff/12345b?text=Set+de+destornilladores',
-    description: 'Puntas intercambiables para arreglos del hogar y electrónica.',
-    inStock: true,
-  },
-  {
-    id: 'linterna-recargable',
-    name: 'Linterna LED recargable',
-    category: 'Herramientas',
-    price: 24500,
-    image: 'https://placehold.co/800x800/fff0d9/b45309?text=Linterna+LED',
-    description: 'Luz potente con batería USB y varios modos de uso.',
-    inStock: true,
-  },
-  {
-    id: 'taladro-inalambrico',
-    name: 'Taladro inalámbrico 12V',
-    category: 'Herramientas',
-    price: 78900,
-    image: 'https://placehold.co/800x800/dbeafe/12345b?text=Taladro+12V',
-    description: 'Compacto, con batería recargable y maletín de transporte.',
-    inStock: false,
-  },
-  {
-    id: 'auto-control-remoto',
-    name: 'Auto a control remoto',
-    category: 'Juguetes',
-    price: 45900,
-    image: 'https://placehold.co/800x800/fde68a/9a3412?text=Auto+RC',
-    description: 'Auto veloz con control simple para jugar en interiores.',
-    inStock: true,
-  },
-  {
-    id: 'bloques-magneticos',
-    name: 'Bloques magnéticos x36',
-    category: 'Juguetes',
-    price: 36500,
-    image: 'https://placehold.co/800x800/e0f2fe/075985?text=Bloques+magneticos',
-    description: 'Piezas coloridas para armar, crear y aprender jugando.',
-    inStock: true,
-  },
-  {
-    id: 'auriculares-bluetooth',
-    name: 'Auriculares Bluetooth',
-    category: 'Electrónica',
-    price: 52900,
-    image: 'https://placehold.co/800x800/e0e7ff/312e81?text=Auriculares+Bluetooth',
-    description: 'Estuche de carga, conexión inalámbrica y micrófono.',
-    inStock: false,
-  },
-  {
-    id: 'parlante-portatil',
-    name: 'Parlante portátil Bluetooth',
-    category: 'Electrónica',
-    price: 48900,
-    image: 'https://placehold.co/800x800/dcfce7/166534?text=Parlante+portatil',
-    description: 'Sonido compacto para llevar, con batería recargable.',
-    inStock: true,
-  },
-  {
-    id: 'organizador-multiuso',
-    name: 'Organizador multiuso',
-    category: 'Hogar',
-    price: 19800,
-    image: 'https://placehold.co/800x800/f1f5f9/334155?text=Organizador+multiuso',
-    description: 'Bandejas apilables para ordenar cocina, baño o escritorio.',
-    inStock: true,
-  },
-  {
-    id: 'botella-termica',
-    name: 'Botella térmica 750 ml',
-    category: 'Accesorios',
-    price: 27500,
-    image: 'https://placehold.co/800x800/cffafe/155e75?text=Botella+termica',
-    description: 'Acero inoxidable, tapa hermética y temperatura por horas.',
-    inStock: true,
-  },
-  {
-    id: 'soporte-celular',
-    name: 'Soporte plegable para celular',
-    category: 'Accesorios',
-    price: 12900,
-    image: 'https://placehold.co/800x800/fee2e2/991b1b?text=Soporte+para+celular',
-    description: 'Base regulable y compacta para videollamadas o series.',
-    inStock: false,
-  },
-]
+export type ManagedProduct = Product & {
+  imagePath: string | null
+  isActive: boolean
+}
+
+export type ProductInput = Omit<ManagedProduct, 'id' | 'image' | 'imagePath'> & {
+  id?: string
+  imagePath?: string | null
+  photo?: File | null
+}
+
+type ProductRow = {
+  id: string
+  name: string
+  category: string
+  description: string
+  price: number | string
+  image_path: string | null
+  in_stock: boolean
+  is_active: boolean
+}
+
+const columns = 'id,name,category,description,price,image_path,in_stock,is_active'
+const imageBucket = 'product-images'
+const allowedImageTypes: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+}
+
+function clientOrThrow(): SupabaseClient {
+  if (!supabase) throw new Error('Supabase no está configurado.')
+  return supabase
+}
+
+function toProduct(row: ProductRow, client: SupabaseClient): ManagedProduct {
+  const image = row.image_path
+    ? client.storage.from(imageBucket).getPublicUrl(row.image_path).data.publicUrl
+    : ''
+
+  return {
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    description: row.description,
+    price: Number(row.price),
+    image,
+    imagePath: row.image_path,
+    inStock: row.in_stock,
+    isActive: row.is_active,
+  }
+}
+
+export async function fetchPublicProducts(): Promise<Product[]> {
+  const client = clientOrThrow()
+  const { data, error } = await client
+    .from('products')
+    .select(columns)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return ((data ?? []) as ProductRow[]).map((row) => toProduct(row, client))
+}
+
+export async function fetchAdminProducts(): Promise<ManagedProduct[]> {
+  const client = clientOrThrow()
+  const { data, error } = await client
+    .from('products')
+    .select(columns)
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+  return ((data ?? []) as ProductRow[]).map((row) => toProduct(row, client))
+}
+
+export async function saveAdminProduct(input: ProductInput): Promise<ManagedProduct> {
+  const client = clientOrThrow()
+  const id = input.id ?? crypto.randomUUID()
+  const oldImagePath = input.imagePath ?? null
+  let imagePath = oldImagePath
+  let uploadedPath: string | null = null
+
+  if (input.photo) {
+    const extension = allowedImageTypes[input.photo.type]
+    if (!extension) throw new Error('La foto debe ser JPG, PNG o WebP.')
+    if (input.photo.size > 5 * 1024 * 1024) throw new Error('La foto no puede superar 5 MB.')
+
+    uploadedPath = `${id}/${crypto.randomUUID()}.${extension}`
+    const { error } = await client.storage.from(imageBucket).upload(uploadedPath, input.photo, {
+      contentType: input.photo.type,
+      upsert: false,
+    })
+    if (error) throw error
+    imagePath = uploadedPath
+  }
+
+  const { data, error } = await client
+    .from('products')
+    .upsert({
+      id,
+      name: input.name.trim(),
+      category: input.category.trim(),
+      description: input.description.trim(),
+      price: input.price,
+      image_path: imagePath,
+      in_stock: input.inStock,
+      is_active: input.isActive,
+    })
+    .select(columns)
+    .single()
+
+  if (error) {
+    if (uploadedPath) await client.storage.from(imageBucket).remove([uploadedPath])
+    throw error
+  }
+
+  if (oldImagePath && uploadedPath && oldImagePath !== uploadedPath) {
+    await client.storage.from(imageBucket).remove([oldImagePath])
+  }
+
+  return toProduct(data as ProductRow, client)
+}
+
+export async function setProductActive(id: string, isActive: boolean): Promise<void> {
+  const { error } = await clientOrThrow()
+    .from('products')
+    .update({ is_active: isActive })
+    .eq('id', id)
+
+  if (error) throw error
+}

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { ProductGrid } from './components/ProductGrid'
 import { ProductDetail } from './components/ProductDetail'
 import { ProductMedia } from './components/ProductMedia'
+import { AdminPage } from './components/AdminPage'
 import { config } from './config'
-import { products } from './data/products'
+import { fetchPublicProducts } from './data/products'
 import type { Product } from './types'
 import { findProductByPath } from './product-route'
 import { buildWhatsAppUrl, formatPrice } from './utils/whatsapp'
+import { supabase } from './lib/supabase'
 
 type Cart = Record<string, number>
 
@@ -20,8 +22,9 @@ function getInitialCart(): Cart {
       || typeof savedCart !== 'object'
       || Array.isArray(savedCart)
       || Object.entries(savedCart).some(([id, quantity]) => (
-        !products.some((product) => product.id === id)
-        || !Number.isInteger(quantity)
+        !id
+        || typeof quantity !== 'number'
+        || !Number.isSafeInteger(quantity)
         || quantity <= 0
       ))
     ) return {}
@@ -35,9 +38,12 @@ function getInitialCart(): Cart {
 function App() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('Todos')
+  const [products, setProducts] = useState<Product[]>([])
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error' | 'unconfigured'>('loading')
   const [cart, setCart] = useState<Cart>(getInitialCart)
   const dialogRef = useRef<HTMLDialogElement>(null)
   const isCatalog = window.location.pathname === '/' || window.location.pathname === '/index.html'
+  const isAdminPath = window.location.pathname.replace(/\/+$/, '') === '/admin'
   const selectedProduct = findProductByPath(window.location.pathname, products)
   const categories = ['Todos', ...new Set(products.map((product) => product.category))]
   const visibleProducts = products.filter((product) => (
@@ -48,9 +54,31 @@ function App() {
     const quantity = cart[product.id]
     return quantity ? [{ ...product, quantity }] : []
   })
-  const itemCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0)
+  const itemCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
   const total = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
   const hasWhatsAppNumber = /^[1-9]\d{7,14}$/.test(config.whatsappNumber)
+
+  async function loadCatalog() {
+    if (!supabase) {
+      setCatalogStatus('unconfigured')
+      return
+    }
+
+    setCatalogStatus('loading')
+    try {
+      const loadedProducts = await fetchPublicProducts()
+      const productIds = new Set(loadedProducts.map((product) => product.id))
+      setProducts(loadedProducts)
+      setCart((currentCart) => Object.fromEntries(
+        Object.entries(currentCart).filter(([id]) => productIds.has(id)),
+      ))
+      setCatalogStatus('ready')
+    } catch {
+      setCatalogStatus('error')
+    }
+  }
+
+  useEffect(() => { void loadCatalog() }, [])
 
   useEffect(() => {
     try {
@@ -91,17 +119,53 @@ function App() {
         <a className="brand" href="/" aria-label={`${config.storeName}, inicio`}>
           <span>{config.storeName}</span>
         </a>
-        <button className="cart-button" type="button" onClick={() => dialogRef.current?.showModal()}>
-          <span>Carrito</span> <span aria-label={`${itemCount} productos`}>{itemCount}</span>
-        </button>
+        {isAdminPath ? (
+          <nav className="site-nav" aria-label="Navegación principal"><a href="/">Volver a la tienda</a></nav>
+        ) : (
+          <>
+            <nav className="site-nav" aria-label="Navegación principal">
+              <a href="/#catalogo">Productos</a>
+              <a href="/#proceso">Cómo comprar</a>
+            </nav>
+            <button className="cart-button" type="button" onClick={() => dialogRef.current?.showModal()}>
+              <span>Carrito</span> <span aria-label={`${itemCount} productos`}>{itemCount}</span>
+            </button>
+          </>
+        )}
       </header>
 
       <main id="contenido">
-        {isCatalog ? (
+        {isAdminPath ? (
+          <AdminPage client={supabase} />
+        ) : isCatalog ? (
+          <>
+          <section className="store-hero" aria-labelledby="hero-title">
+            <div className="hero-copy">
+              <p className="hero-kicker">Productos importados</p>
+              <h1 id="hero-title">Encontrá lo que buscás.</h1>
+              <p>Explorá productos, revisá el total y coordiná stock y entrega directamente por WhatsApp.</p>
+              <a className="hero-cta" href="#catalogo">Explorar productos</a>
+            </div>
+            <section className="order-steps" id="proceso" aria-labelledby="steps-title">
+              <h2 id="steps-title">Así funciona tu pedido</h2>
+              <ol>
+                <li><span>01</span><div><strong>Elegí</strong><small>Explorá productos y precios.</small></div></li>
+                <li><span>02</span><div><strong>Revisá</strong><small>Controlá cantidades y total estimado.</small></div></li>
+                <li><span>03</span><div><strong>Confirmá</strong><small>Coordiná stock y entrega por WhatsApp.</small></div></li>
+              </ol>
+            </section>
+          </section>
+          <p className="purchase-transparency">
+            {hasWhatsAppNumber ? (
+              <><strong>Sin pago en esta web.</strong> No ingresás datos de tarjeta; el negocio confirma stock y entrega por WhatsApp.</>
+            ) : (
+              <><strong>Pedidos por WhatsApp no disponibles todavía.</strong> Falta configurar el número del negocio.</>
+            )}
+          </p>
           <section className="catalog" id="catalogo" aria-labelledby="catalog-title">
             <div className="catalog-heading">
               <h1 id="catalog-title">Productos</h1>
-              <p>{visibleProducts.length} {visibleProducts.length === 1 ? 'producto' : 'productos'}</p>
+              <p>{catalogStatus === 'ready' ? `${visibleProducts.length} ${visibleProducts.length === 1 ? 'producto' : 'productos'}` : ''}</p>
             </div>
             <div className="catalog-layout">
               <div className="catalog-filters">
@@ -130,7 +194,16 @@ function App() {
                 </div>
               </div>
               <div className="catalog-results">
-                {visibleProducts.length > 0 ? (
+                {catalogStatus === 'loading' ? (
+                  <p className="catalog-message" role="status">Cargando productos…</p>
+                ) : catalogStatus === 'unconfigured' ? (
+                  <p className="catalog-message" role="status">El catálogo todavía se está preparando. Volvé a consultar pronto.</p>
+                ) : catalogStatus === 'error' ? (
+                  <div className="catalog-message" role="alert">
+                    <p>No se pudo cargar el catálogo.</p>
+                    <button className="add-button" type="button" onClick={() => void loadCatalog()}>Reintentar</button>
+                  </div>
+                ) : visibleProducts.length > 0 ? (
                   <ProductGrid products={visibleProducts} onAdd={addToCart} />
                 ) : (
                   <p className="no-results" role="status">No encontramos productos con esos criterios.</p>
@@ -138,6 +211,13 @@ function App() {
               </div>
             </div>
           </section>
+          </>
+        ) : catalogStatus === 'loading' ? (
+          <p className="catalog-message" role="status">Cargando producto…</p>
+        ) : catalogStatus === 'unconfigured' ? (
+          <section className="not-found"><h1>Catálogo sin configurar</h1><a href="/">Volver</a></section>
+        ) : catalogStatus === 'error' ? (
+          <section className="not-found"><h1>No se pudo cargar el producto</h1><a href="/">Volver a productos</a></section>
         ) : selectedProduct ? (
           <ProductDetail product={selectedProduct} onAdd={addToCart} />
         ) : (
@@ -148,7 +228,7 @@ function App() {
         )}
       </main>
 
-      <dialog className="cart-dialog" ref={dialogRef} aria-labelledby="cart-title">
+      {!isAdminPath && <dialog className="cart-dialog" ref={dialogRef} aria-labelledby="cart-title">
         <div className="cart-dialog-content">
           <header className="cart-dialog-header">
             <h2 id="cart-title">Carrito</h2>
@@ -196,7 +276,7 @@ function App() {
             <p className="whatsapp-config" role="status">Pedidos por WhatsApp no disponibles por el momento.</p>
           )}
         </div>
-      </dialog>
+      </dialog>}
 
       <footer className="site-footer">
         <p>© {new Date().getFullYear()} {config.storeName}</p>
